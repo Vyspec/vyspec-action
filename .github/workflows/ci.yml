@@ -1,0 +1,28 @@
+name: Action checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the Action
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Parse action metadata
+        run: ruby -e 'require "yaml"; YAML.safe_load(File.read("action.yml"), aliases: true)'
+
+      - name: Test the contract
+        run: python -m unittest discover -s tests -v

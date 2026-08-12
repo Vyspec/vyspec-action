@@ -1,0 +1,251 @@
+name: Vyspec QA
+description: Run Vyspec QA against an application on a GitHub Actions runner.
+author: Vyspec
+
+branding:
+  color: blue
+  icon: eye
+
+inputs:
+  project-api-key:
+    description: Revocable Vyspec Project API key stored as a GitHub Actions secret.
+    required: true
+  run-profile-id:
+    description: UUID of the saved Run Profile to execute.
+    required: false
+  one-time-profile-file:
+    description: Repository-relative path to a one-time Run Profile JSON file.
+    required: false
+  run-notes-file:
+    description: Repository-relative path to a JSON array of customer-supplied Run notes.
+    required: false
+  app-ready-timeout:
+    default: "120"
+    description: Seconds to wait for the application on loopback port 3000.
+    required: false
+  github-token:
+    default: ${{ github.token }}
+    description: GitHub token used to create or update the pull-request report.
+    required: false
+
+outputs:
+  exit-code:
+    description: Vyspec operational process exit code. A completed QA failure still returns zero.
+    value: ${{ steps.qa.outputs.exit_code }}
+  finding-count:
+    description: Number of confirmed findings in the completed Run.
+    value: ${{ steps.result.outputs.finding_count }}
+  qa-verdict:
+    description: Final QA verdict when the runner completed.
+    value: ${{ steps.result.outputs.qa_verdict }}
+  result-file:
+    description: Path to the canonical Vyspec JSON result on the Actions runner.
+    value: ${{ steps.result.outputs.result_file }}
+  run-id:
+    description: Vyspec Run identifier when execution started.
+    value: ${{ steps.result.outputs.run_id }}
+  run-url:
+    description: Authenticated Vyspec web URL for the completed Run.
+    value: ${{ steps.result.outputs.run_url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Vyspec configuration
+      shell: bash
+      env:
+        VSY_ONE_TIME_PROFILE_FILE: ${{ inputs.one-time-profile-file }}
+        VSY_PROJECT_API_KEY: ${{ inputs.project-api-key }}
+        VSY_RUN_NOTES_FILE: ${{ inputs.run-notes-file }}
+        VSY_RUN_PROFILE_ID: ${{ inputs.run-profile-id }}
+      run: |
+        if [[ "${RUNNER_OS}" != "Linux" ]]; then
+          echo "::error::Vyspec currently supports GitHub-hosted Ubuntu runners only."
+          exit 2
+        fi
+        if [[ -z "${VSY_PROJECT_API_KEY}" ]]; then
+          echo "::error::project-api-key is required."
+          exit 2
+        fi
+        if [[ -n "${VSY_RUN_PROFILE_ID}" && -n "${VSY_ONE_TIME_PROFILE_FILE}" ]]; then
+          echo "::error::Set either run-profile-id or one-time-profile-file, not both."
+          exit 2
+        fi
+        if [[ -z "${VSY_RUN_PROFILE_ID}" && -z "${VSY_ONE_TIME_PROFILE_FILE}" ]]; then
+          echo "::error::Set run-profile-id or one-time-profile-file."
+          exit 2
+        fi
+        if [[ -n "${VSY_ONE_TIME_PROFILE_FILE}" && ! -f "${VSY_ONE_TIME_PROFILE_FILE}" ]]; then
+          echo "::error::The one-time-profile-file does not exist."
+          exit 2
+        fi
+        if [[ -n "${VSY_RUN_NOTES_FILE}" && ! -f "${VSY_RUN_NOTES_FILE}" ]]; then
+          echo "::error::The run-notes-file does not exist."
+          exit 2
+        fi
+
+    - name: Set up Python
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: "3.12"
+
+    - name: Install the Vyspec CLI
+      shell: bash
+      env:
+        PIP_DISABLE_PIP_VERSION_CHECK: "1"
+        VYSPEC_CLI_VERSION: "0.1.2"
+      run: python -m pip install "vyspec==${VYSPEC_CLI_VERSION}"
+
+    - name: Install the Vyspec browser
+      shell: bash
+      run: vsy install-browser --with-deps
+
+    - name: Run Vyspec QA
+      id: qa
+      continue-on-error: true
+      shell: bash
+      env:
+        CI: "true"
+        VSY_APP_READY_TIMEOUT: ${{ inputs.app-ready-timeout }}
+        VSY_CI_BRANCH: ${{ github.head_ref || github.ref_name }}
+        VSY_CI_PROVIDER: github
+        VSY_CI_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        VSY_CI_REPOSITORY: ${{ github.repository }}
+        VSY_ONE_TIME_PROFILE_FILE: ${{ inputs.one-time-profile-file }}
+        VSY_PROJECT_API_KEY: ${{ inputs.project-api-key }}
+        VSY_RESULT_FILE: ${{ runner.temp }}/vyspec-result.json
+        VSY_RUN_NOTES_FILE: ${{ inputs.run-notes-file }}
+        VSY_RUN_PROFILE_ID: ${{ inputs.run-profile-id }}
+      run: |
+        rm -f "${VSY_RESULT_FILE}"
+        VSY_CI_COMMIT_SHA="$(git rev-parse --verify HEAD)"
+        export VSY_CI_COMMIT_SHA
+        arguments=(
+          run
+          --app-ready-timeout "${VSY_APP_READY_TIMEOUT}"
+          --result-file "${VSY_RESULT_FILE}"
+        )
+        if [[ -n "${VSY_RUN_PROFILE_ID}" ]]; then
+          arguments+=(--profile "${VSY_RUN_PROFILE_ID}")
+        else
+          arguments+=(--one-time "${VSY_ONE_TIME_PROFILE_FILE}")
+        fi
+        if [[ -n "${VSY_RUN_NOTES_FILE}" ]]; then
+          arguments+=(--notes "${VSY_RUN_NOTES_FILE}")
+        fi
+        set +e
+        vsy "${arguments[@]}"
+        exit_code=$?
+        set -e
+        echo "exit_code=${exit_code}" >> "${GITHUB_OUTPUT}"
+        exit "${exit_code}"
+
+    - name: Read Vyspec result
+      id: result
+      if: ${{ always() }}
+      shell: bash
+      env:
+        VSY_RESULT_FILE: ${{ runner.temp }}/vyspec-result.json
+      run: |
+        echo "result_file=${VSY_RESULT_FILE}" >> "${GITHUB_OUTPUT}"
+        if [[ ! -s "${VSY_RESULT_FILE}" ]]; then
+          exit 0
+        fi
+        echo "run_id=$(jq -r '.run_id' "${VSY_RESULT_FILE}")" >> "${GITHUB_OUTPUT}"
+        echo "qa_verdict=$(jq -r '.qa_verdict' "${VSY_RESULT_FILE}")" >> "${GITHUB_OUTPUT}"
+        echo "run_url=$(jq -r '.run_url' "${VSY_RESULT_FILE}")" >> "${GITHUB_OUTPUT}"
+        echo "finding_count=$(jq -r '(.findings // []) | length' "${VSY_RESULT_FILE}")" >> "${GITHUB_OUTPUT}"
+        echo "findings=$(jq -c '.findings // []' "${VSY_RESULT_FILE}")" >> "${GITHUB_OUTPUT}"
+
+    - name: Update pull-request report
+      if: ${{ always() && github.event_name == 'pull_request' && inputs.github-token != '' }}
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      env:
+        VSY_FINDINGS: ${{ steps.result.outputs.findings }}
+        VSY_QA_VERDICT: ${{ steps.result.outputs.qa_verdict }}
+        VSY_RUN_URL: ${{ steps.result.outputs.run_url }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const marker = "<!-- vyspec-qa-result -->";
+          const verdict = process.env.VSY_QA_VERDICT;
+          const runUrl = process.env.VSY_RUN_URL;
+          let findings = [];
+          try {
+            findings = JSON.parse(process.env.VSY_FINDINGS || "[]");
+          } catch {
+            findings = [];
+          }
+          const markdownText = (value) => String(value ?? "")
+            .replaceAll("\\", "\\\\")
+            .replace(/([`*_[\]<>])/g, "\\$1")
+            .replaceAll("@", "@\u200b")
+            .replace(/\s+/g, " ")
+            .trim();
+          let heading = "⚠️ Vyspec QA — EXECUTION INCOMPLETE";
+          let summary = "Vyspec could not produce a QA verdict. Review the workflow logs for the operational error.";
+          if (verdict === "failed") {
+            heading = "❌ Vyspec QA — FAILED";
+            summary = "Vyspec confirmed defects in this pull request.";
+          } else if (verdict === "passed") {
+            heading = "✅ Vyspec QA — PASSED";
+            summary = "Vyspec did not confirm any defects in this pull request.";
+          }
+          const workflowUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const details = runUrl
+            ? `[View findings, evidence, and execution trace →](${runUrl})`
+            : `[View workflow logs →](${workflowUrl})`;
+          const shownFindings = findings.slice(0, 10);
+          const executionLabel = verdict === "passed" || verdict === "failed"
+            ? "✅ Completed"
+            : "⚠️ Incomplete";
+          const qaLabel = verdict === "failed"
+            ? "❌ FAILED"
+            : verdict === "passed"
+              ? "✅ PASSED"
+              : "Unavailable";
+          let findingReport = `**Execution:** ${executionLabel}\n**QA verdict:** ${qaLabel}\n**Confirmed findings:** ${findings.length}`;
+          if (shownFindings.length > 0) {
+            const items = shownFindings.map((finding, index) => {
+              const severity = markdownText(finding.severity).toUpperCase();
+              const title = markdownText(finding.title);
+              const observed = markdownText(finding.observed).slice(0, 300);
+              return `${index + 1}. **${severity} — ${title}**${observed ? `\n   ${observed}` : ""}`;
+            });
+            findingReport += `\n\n${items.join("\n")}`;
+            if (findings.length > shownFindings.length) {
+              findingReport += `\n\n_${findings.length - shownFindings.length} more findings are available in the full report._`;
+            }
+          }
+          const body = `${marker}\n## ${heading}\n\n${summary}\n\n${findingReport}\n\n${details}`;
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            per_page: 100,
+          });
+          const existing = comments.find((comment) =>
+            comment.user?.type === "Bot" && comment.body?.includes(marker)
+          );
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Preserve Vyspec operational status
+      if: ${{ always() && steps.qa.outcome == 'failure' }}
+      shell: bash
+      env:
+        VSY_EXIT_CODE: ${{ steps.qa.outputs.exit_code }}
+      run: exit "${VSY_EXIT_CODE:-2}"
