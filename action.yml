@@ -36,6 +36,12 @@ inputs:
     default: ${{ github.token }}
     description: GitHub token used to create or update the pull-request report.
     required: false
+  pull-request-number:
+    description: Pull-request number to associate with the Run when the workflow was not triggered by pull_request.
+    required: false
+  ci-branch:
+    description: Source branch to associate with the Run when GitHub cannot infer it from the event.
+    required: false
 
 outputs:
   exit-code:
@@ -124,9 +130,9 @@ runs:
       env:
         CI: "true"
         VSY_APP_READY_TIMEOUT: ${{ inputs.app-ready-timeout }}
-        VSY_CI_BRANCH: ${{ github.head_ref || github.ref_name }}
+        VSY_CI_BRANCH: ${{ inputs.ci-branch || github.head_ref || github.ref_name }}
         VSY_CI_PROVIDER: github
-        VSY_CI_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        VSY_CI_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number || github.event.pull_request.number || github.event.issue.number }}
         VSY_CI_REPOSITORY: ${{ github.repository }}
         VSY_INSTRUCTIONS: ${{ inputs.instructions }}
         VSY_INSTRUCTIONS_FILE: ${{ inputs.instructions-file }}
@@ -187,15 +193,21 @@ runs:
         echo "findings=$(jq -c '.findings // []' "${VSY_RESULT_FILE}")" >> "${GITHUB_OUTPUT}"
 
     - name: Update pull-request report
-      if: ${{ always() && github.event_name == 'pull_request' && inputs.github-token != '' }}
+      if: ${{ always() && inputs.github-token != '' }}
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       env:
         VSY_FINDINGS: ${{ steps.result.outputs.findings }}
+        VSY_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number || github.event.pull_request.number || github.event.issue.number }}
         VSY_QA_VERDICT: ${{ steps.result.outputs.qa_verdict }}
         VSY_RUN_URL: ${{ steps.result.outputs.run_url }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          const pullRequestNumber = Number(process.env.VSY_PULL_REQUEST_NUMBER);
+          if (!Number.isSafeInteger(pullRequestNumber) || pullRequestNumber <= 0) {
+            core.info("No pull request number was supplied; skipping the GitHub report.");
+            return;
+          }
           const marker = "<!-- vyspec-qa-result -->";
           const verdict = process.env.VSY_QA_VERDICT;
           const runUrl = process.env.VSY_RUN_URL;
@@ -250,7 +262,7 @@ runs:
           const comments = await github.paginate(github.rest.issues.listComments, {
             owner: context.repo.owner,
             repo: context.repo.repo,
-            issue_number: context.issue.number,
+            issue_number: pullRequestNumber,
             per_page: 100,
           });
           const existing = comments.find((comment) =>
@@ -267,7 +279,7 @@ runs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: pullRequestNumber,
               body,
             });
           }

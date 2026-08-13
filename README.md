@@ -102,6 +102,8 @@ that configuration.
 | `run-notes-file` | No | Path to a JSON array of notes attached to the Run. |
 | `app-ready-timeout` | No | Seconds to wait for port 3000; defaults to 120. |
 | `github-token` | No | Token used for the PR report; defaults to `github.token`. |
+| `pull-request-number` | No | Explicit PR number for comment-triggered or manually dispatched workflows. |
+| `ci-branch` | No | Explicit source branch when the event does not expose `github.head_ref`. |
 
 Automatic-login Session Profiles may require additional credential names. Store those exact names
 as GitHub Actions secrets and expose them only to the Vyspec job.

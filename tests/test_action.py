@@ -203,6 +203,10 @@ class ActionContractTests(unittest.TestCase):
 
     def test_reports_one_comment_and_preserves_operational_failure(self) -> None:
         self.assertIn("<!-- vyspec-qa-result -->", self.source)
+        self.assertIn("pull-request-number:", self.source)
+        self.assertIn("ci-branch:", self.source)
+        self.assertIn("VSY_PULL_REQUEST_NUMBER", self.source)
+        self.assertIn("No pull request number was supplied", self.source)
         self.assertIn("github.rest.issues.updateComment", self.source)
         self.assertIn("github.rest.issues.createComment", self.source)
         self.assertIn("❌ Vyspec QA — FAILED", self.source)
@@ -216,6 +220,8 @@ class ActionContractTests(unittest.TestCase):
         self.assertIn("instructions-file:", readme)
         self.assertIn("session-profile-id:", readme)
         self.assertIn("start-path:", readme)
+        self.assertIn("`pull-request-number`", readme)
+        self.assertIn("`ci-branch`", readme)
         self.assertIn("pull-requests: write", readme)
         self.assertIn("127.0.0.1:3000", readme)
 
