@@ -13,8 +13,17 @@ inputs:
   run-profile-id:
     description: UUID of the saved Run Profile to execute.
     required: false
-  one-time-profile-file:
-    description: Repository-relative path to a one-time Run Profile JSON file.
+  instructions:
+    description: Direct QA instructions for this Run.
+    required: false
+  instructions-file:
+    description: Repository-relative path to a plain-text QA instructions file.
+    required: false
+  session-profile-id:
+    description: Optional Session Profile UUID for authenticating a direct Run.
+    required: false
+  start-path:
+    description: Optional origin-relative page to open for a direct Run.
     required: false
   run-notes-file:
     description: Repository-relative path to a JSON array of customer-supplied Run notes.
@@ -54,11 +63,15 @@ runs:
     - name: Validate Vyspec configuration
       shell: bash
       env:
-        VSY_ONE_TIME_PROFILE_FILE: ${{ inputs.one-time-profile-file }}
+        VSY_INSTRUCTIONS: ${{ inputs.instructions }}
+        VSY_INSTRUCTIONS_FILE: ${{ inputs.instructions-file }}
         VSY_PROJECT_API_KEY: ${{ inputs.project-api-key }}
         VSY_RUN_NOTES_FILE: ${{ inputs.run-notes-file }}
         VSY_RUN_PROFILE_ID: ${{ inputs.run-profile-id }}
+        VSY_SESSION_PROFILE_ID: ${{ inputs.session-profile-id }}
+        VSY_START_PATH: ${{ inputs.start-path }}
       run: |
+        set -euo pipefail
         if [[ "${RUNNER_OS}" != "Linux" ]]; then
           echo "::error::Vyspec currently supports GitHub-hosted Ubuntu runners only."
           exit 2
@@ -67,16 +80,20 @@ runs:
           echo "::error::project-api-key is required."
           exit 2
         fi
-        if [[ -n "${VSY_RUN_PROFILE_ID}" && -n "${VSY_ONE_TIME_PROFILE_FILE}" ]]; then
-          echo "::error::Set either run-profile-id or one-time-profile-file, not both."
+        source_count=0
+        [[ -n "${VSY_RUN_PROFILE_ID}" ]] && ((source_count += 1))
+        [[ -n "${VSY_INSTRUCTIONS}" ]] && ((source_count += 1))
+        [[ -n "${VSY_INSTRUCTIONS_FILE}" ]] && ((source_count += 1))
+        if [[ "${source_count}" -ne 1 ]]; then
+          echo "::error::Set exactly one of run-profile-id, instructions, or instructions-file."
           exit 2
         fi
-        if [[ -z "${VSY_RUN_PROFILE_ID}" && -z "${VSY_ONE_TIME_PROFILE_FILE}" ]]; then
-          echo "::error::Set run-profile-id or one-time-profile-file."
+        if [[ -n "${VSY_RUN_PROFILE_ID}" && ( -n "${VSY_SESSION_PROFILE_ID}" || -n "${VSY_START_PATH}" ) ]]; then
+          echo "::error::session-profile-id and start-path are available only for direct instructions."
           exit 2
         fi
-        if [[ -n "${VSY_ONE_TIME_PROFILE_FILE}" && ! -f "${VSY_ONE_TIME_PROFILE_FILE}" ]]; then
-          echo "::error::The one-time-profile-file does not exist."
+        if [[ -n "${VSY_INSTRUCTIONS_FILE}" && ! -f "${VSY_INSTRUCTIONS_FILE}" ]]; then
+          echo "::error::The instructions-file does not exist."
           exit 2
         fi
         if [[ -n "${VSY_RUN_NOTES_FILE}" && ! -f "${VSY_RUN_NOTES_FILE}" ]]; then
@@ -93,7 +110,7 @@ runs:
       shell: bash
       env:
         PIP_DISABLE_PIP_VERSION_CHECK: "1"
-        VYSPEC_CLI_VERSION: "0.1.2"
+        VYSPEC_CLI_VERSION: "0.1.3"
       run: python -m pip install "vyspec==${VYSPEC_CLI_VERSION}"
 
     - name: Install the Vyspec browser
@@ -111,12 +128,16 @@ runs:
         VSY_CI_PROVIDER: github
         VSY_CI_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         VSY_CI_REPOSITORY: ${{ github.repository }}
-        VSY_ONE_TIME_PROFILE_FILE: ${{ inputs.one-time-profile-file }}
+        VSY_INSTRUCTIONS: ${{ inputs.instructions }}
+        VSY_INSTRUCTIONS_FILE: ${{ inputs.instructions-file }}
         VSY_PROJECT_API_KEY: ${{ inputs.project-api-key }}
         VSY_RESULT_FILE: ${{ runner.temp }}/vyspec-result.json
         VSY_RUN_NOTES_FILE: ${{ inputs.run-notes-file }}
         VSY_RUN_PROFILE_ID: ${{ inputs.run-profile-id }}
+        VSY_SESSION_PROFILE_ID: ${{ inputs.session-profile-id }}
+        VSY_START_PATH: ${{ inputs.start-path }}
       run: |
+        set -euo pipefail
         rm -f "${VSY_RESULT_FILE}"
         VSY_CI_COMMIT_SHA="$(git rev-parse --verify HEAD)"
         export VSY_CI_COMMIT_SHA
@@ -127,8 +148,16 @@ runs:
         )
         if [[ -n "${VSY_RUN_PROFILE_ID}" ]]; then
           arguments+=(--profile "${VSY_RUN_PROFILE_ID}")
+        elif [[ -n "${VSY_INSTRUCTIONS}" ]]; then
+          arguments+=(--instructions "${VSY_INSTRUCTIONS}")
         else
-          arguments+=(--one-time "${VSY_ONE_TIME_PROFILE_FILE}")
+          arguments+=(--instructions-file "${VSY_INSTRUCTIONS_FILE}")
+        fi
+        if [[ -n "${VSY_SESSION_PROFILE_ID}" ]]; then
+          arguments+=(--session-profile "${VSY_SESSION_PROFILE_ID}")
+        fi
+        if [[ -n "${VSY_START_PATH}" ]]; then
+          arguments+=(--start-path "${VSY_START_PATH}")
         fi
         if [[ -n "${VSY_RUN_NOTES_FILE}" ]]; then
           arguments+=(--notes "${VSY_RUN_NOTES_FILE}")

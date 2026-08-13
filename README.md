@@ -2,8 +2,8 @@
 
 Run Vyspec against the application already started by your GitHub Actions workflow. The Action
 installs the pinned public Vyspec CLI and Chromium, waits for the application on loopback port
-`3000`, executes either a saved or one-time Run Profile, writes the canonical JSON result, and
-creates or updates one pull-request report.
+`3000`, executes either a saved Run Profile or direct QA instructions, writes the canonical JSON
+result, and creates or updates one pull-request report.
 
 Vyspec executes on the customer's GitHub runner. Source code, environment variables, and
 application credentials remain on that runner; only bounded browser observations and Run results
@@ -47,33 +47,47 @@ jobs:
 
 The Action waits for the application, so a separate readiness loop is unnecessary.
 
-## One-time Run Profile
+## Direct QA instructions
 
-Generate a one-time profile from a ticket, pull-request description, or another CI step, then pass
-its repository-relative path:
+For one-off verification, provide the QA instructions without creating a saved Run Profile:
 
 ```yaml
-- name: Build one-time QA instructions
-  env:
-    ISSUE_BODY: ${{ github.event.pull_request.body }}
-  run: |
-    jq -n \
-      --arg instructions "${ISSUE_BODY}" \
-      '{
-        qa_instructions: $instructions,
-        execution_depth: "balanced",
-        start_path: "/",
-        browser_preset: "desktop_chrome"
-      }' > .vyspec-one-time.json
-
-- name: Run one-time Vyspec QA
+- name: Verify this change with Vyspec
   uses: ramonzubiate/vyspec-action@v1
   with:
     project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
-    one-time-profile-file: .vyspec-one-time.json
+    instructions: Verify the corrected checkout total and report any regression.
 ```
 
-Exactly one of `run-profile-id` and `one-time-profile-file` is required.
+For longer instructions committed to the repository, use a plain-text file:
+
+```yaml
+- name: Run Vyspec from QA instructions
+  uses: ramonzubiate/vyspec-action@v1
+  with:
+    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
+    instructions-file: .vyspec/checkout-qa.md
+```
+
+If the target page requires a signed-in user, attach an automatic-login Session Profile and an
+optional page to open after login:
+
+```yaml
+- name: Verify an authenticated account page
+  uses: ramonzubiate/vyspec-action@v1
+  env:
+    VSY_TEST_EMAIL: ${{ secrets.VSY_TEST_EMAIL }}
+    VSY_TEST_PASSWORD: ${{ secrets.VSY_TEST_PASSWORD }}
+  with:
+    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
+    instructions-file: .vyspec/account-qa.md
+    session-profile-id: 423e4567-e89b-42d3-a456-426614174000
+    start-path: /account
+```
+
+Exactly one of `run-profile-id`, `instructions`, or `instructions-file` is required. Session
+Profile and start-path inputs apply only to direct instructions; saved Run Profiles already own
+that configuration.
 
 ## Inputs
 
@@ -81,7 +95,10 @@ Exactly one of `run-profile-id` and `one-time-profile-file` is required.
 | --- | --- | --- |
 | `project-api-key` | Yes | Revocable Project API key stored in GitHub Actions secrets. |
 | `run-profile-id` | One execution source | Saved Run Profile UUID. |
-| `one-time-profile-file` | One execution source | Path to one-time Run Profile JSON. |
+| `instructions` | One execution source | Direct QA instructions. |
+| `instructions-file` | One execution source | Path to plain-text QA instructions. |
+| `session-profile-id` | No | Session Profile UUID for a direct authenticated Run. |
+| `start-path` | No | Origin-relative start path for a direct Run; defaults to `/`. |
 | `run-notes-file` | No | Path to a JSON array of notes attached to the Run. |
 | `app-ready-timeout` | No | Seconds to wait for port 3000; defaults to 120. |
 | `github-token` | No | Token used for the PR report; defaults to `github.token`. |
