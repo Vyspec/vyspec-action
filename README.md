@@ -39,7 +39,7 @@ jobs:
 
       - name: Run Vyspec QA
         id: vyspec
-        uses: ramonzubiate/vyspec-action@v1
+        uses: Vyspec/vyspec-action@v1
         with:
           project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
           run-profile-id: 123e4567-e89b-42d3-a456-426614174000
@@ -53,7 +53,7 @@ For one-off verification, provide the QA instructions without creating a saved R
 
 ```yaml
 - name: Verify this change with Vyspec
-  uses: ramonzubiate/vyspec-action@v1
+  uses: Vyspec/vyspec-action@v1
   with:
     project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
     instructions: Verify the corrected checkout total and report any regression.
@@ -63,7 +63,7 @@ For longer instructions committed to the repository, use a plain-text file:
 
 ```yaml
 - name: Run Vyspec from QA instructions
-  uses: ramonzubiate/vyspec-action@v1
+  uses: Vyspec/vyspec-action@v1
   with:
     project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
     instructions-file: .vyspec/checkout-qa.md
@@ -74,7 +74,7 @@ optional page to open after login:
 
 ```yaml
 - name: Verify an authenticated account page
-  uses: ramonzubiate/vyspec-action@v1
+  uses: Vyspec/vyspec-action@v1
   env:
     VSY_TEST_EMAIL: ${{ secrets.VSY_TEST_EMAIL }}
     VSY_TEST_PASSWORD: ${{ secrets.VSY_TEST_PASSWORD }}
