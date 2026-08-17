@@ -21,7 +21,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   qa:
@@ -41,7 +40,7 @@ jobs:
         id: vyspec
         uses: Vyspec/vyspec-action@v1
         with:
-          project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
+          project-api-key: ${{ secrets.VSY_PROJECT_API_KEY_PROJECT_ID_WITHOUT_HYPHENS }}
           run-profile-id: 123e4567-e89b-42d3-a456-426614174000
 ```
 
@@ -55,7 +54,7 @@ For one-off verification, provide the QA instructions without creating a saved R
 - name: Verify this change with Vyspec
   uses: Vyspec/vyspec-action@v1
   with:
-    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
+    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY_PROJECT_ID_WITHOUT_HYPHENS }}
     instructions: Verify the corrected checkout total and report any regression.
 ```
 
@@ -65,7 +64,7 @@ For longer instructions committed to the repository, use a plain-text file:
 - name: Run Vyspec from QA instructions
   uses: Vyspec/vyspec-action@v1
   with:
-    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
+    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY_PROJECT_ID_WITHOUT_HYPHENS }}
     instructions-file: .vyspec/checkout-qa.md
 ```
 
@@ -79,7 +78,7 @@ optional page to open after login:
     VSY_TEST_EMAIL: ${{ secrets.VSY_TEST_EMAIL }}
     VSY_TEST_PASSWORD: ${{ secrets.VSY_TEST_PASSWORD }}
   with:
-    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY }}
+    project-api-key: ${{ secrets.VSY_PROJECT_API_KEY_PROJECT_ID_WITHOUT_HYPHENS }}
     instructions-file: .vyspec/account-qa.md
     session-profile-id: 423e4567-e89b-42d3-a456-426614174000
     start-path: /account
@@ -101,12 +100,15 @@ that configuration.
 | `start-path` | No | Origin-relative start path for a direct Run; defaults to `/`. |
 | `run-notes-file` | No | Path to a JSON array of notes attached to the Run. |
 | `app-ready-timeout` | No | Seconds to wait for port 3000; defaults to 120. |
-| `github-token` | No | Token used for the PR report; defaults to `github.token`. |
 | `pull-request-number` | No | Explicit PR number for comment-triggered or manually dispatched workflows. |
 | `ci-branch` | No | Explicit source branch when the event does not expose `github.head_ref`. |
 
 Automatic-login Session Profiles may require additional credential names. Store those exact names
 as GitHub Actions secrets and expose them only to the Vyspec job.
+
+Connect the repository through the Vyspec GitHub App first. Vyspec creates the managed Project API
+key secret and publishes the pull-request report through the app, so the workflow does not need
+pull-request write permission or a separate GitHub token.
 
 ## Outputs
 

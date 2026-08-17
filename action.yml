@@ -32,10 +32,6 @@ inputs:
     default: "120"
     description: Seconds to wait for the application on loopback port 3000.
     required: false
-  github-token:
-    default: ${{ github.token }}
-    description: GitHub token used to create or update the pull-request report.
-    required: false
   pull-request-number:
     description: Pull-request number to associate with the Run when the workflow was not triggered by pull_request.
     required: false
@@ -193,96 +189,40 @@ runs:
         echo "findings=$(jq -c '.findings // []' "${VSY_RESULT_FILE}")" >> "${GITHUB_OUTPUT}"
 
     - name: Update pull-request report
-      if: ${{ always() && inputs.github-token != '' }}
-      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      if: ${{ always() }}
+      shell: bash
       env:
-        VSY_FINDINGS: ${{ steps.result.outputs.findings }}
+        VSY_PROJECT_API_KEY: ${{ inputs.project-api-key }}
         VSY_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number || github.event.pull_request.number || github.event.issue.number }}
-        VSY_QA_VERDICT: ${{ steps.result.outputs.qa_verdict }}
-        VSY_RUN_URL: ${{ steps.result.outputs.run_url }}
-      with:
-        github-token: ${{ inputs.github-token }}
-        script: |
-          const pullRequestNumber = Number(process.env.VSY_PULL_REQUEST_NUMBER);
-          if (!Number.isSafeInteger(pullRequestNumber) || pullRequestNumber <= 0) {
-            core.info("No pull request number was supplied; skipping the GitHub report.");
-            return;
-          }
-          const marker = "<!-- vyspec-qa-result -->";
-          const verdict = process.env.VSY_QA_VERDICT;
-          const runUrl = process.env.VSY_RUN_URL;
-          let findings = [];
-          try {
-            findings = JSON.parse(process.env.VSY_FINDINGS || "[]");
-          } catch {
-            findings = [];
-          }
-          const markdownText = (value) => String(value ?? "")
-            .replaceAll("\\", "\\\\")
-            .replace(/([`*_[\]<>])/g, "\\$1")
-            .replaceAll("@", "@\u200b")
-            .replace(/\s+/g, " ")
-            .trim();
-          let heading = "⚠️ Vyspec QA — EXECUTION INCOMPLETE";
-          let summary = "Vyspec could not produce a QA verdict. Review the workflow logs for the operational error.";
-          if (verdict === "failed") {
-            heading = "❌ Vyspec QA — FAILED";
-            summary = "Vyspec confirmed defects in this pull request.";
-          } else if (verdict === "passed") {
-            heading = "✅ Vyspec QA — PASSED";
-            summary = "Vyspec did not confirm any defects in this pull request.";
-          }
-          const workflowUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-          const details = runUrl
-            ? `[View findings, evidence, and execution trace →](${runUrl})`
-            : `[View workflow logs →](${workflowUrl})`;
-          const shownFindings = findings.slice(0, 10);
-          const executionLabel = verdict === "passed" || verdict === "failed"
-            ? "✅ Completed"
-            : "⚠️ Incomplete";
-          const qaLabel = verdict === "failed"
-            ? "❌ FAILED"
-            : verdict === "passed"
-              ? "✅ PASSED"
-              : "Unavailable";
-          let findingReport = `**Execution:** ${executionLabel}\n**QA verdict:** ${qaLabel}\n**Confirmed findings:** ${findings.length}`;
-          if (shownFindings.length > 0) {
-            const items = shownFindings.map((finding, index) => {
-              const severity = markdownText(finding.severity).toUpperCase();
-              const title = markdownText(finding.title);
-              const observed = markdownText(finding.observed).slice(0, 300);
-              return `${index + 1}. **${severity} — ${title}**${observed ? `\n   ${observed}` : ""}`;
-            });
-            findingReport += `\n\n${items.join("\n")}`;
-            if (findings.length > shownFindings.length) {
-              findingReport += `\n\n_${findings.length - shownFindings.length} more findings are available in the full report._`;
-            }
-          }
-          const body = `${marker}\n## ${heading}\n\n${summary}\n\n${findingReport}\n\n${details}`;
-          const comments = await github.paginate(github.rest.issues.listComments, {
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: pullRequestNumber,
-            per_page: 100,
-          });
-          const existing = comments.find((comment) =>
-            comment.user?.type === "Bot" && comment.body?.includes(marker)
-          );
-          if (existing) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: existing.id,
-              body,
-            });
-          } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequestNumber,
-              body,
-            });
-          }
+        VSY_REPOSITORY_ID: ${{ github.repository_id }}
+        VSY_RESULT_FILE: ${{ runner.temp }}/vyspec-result.json
+      run: |
+        set -euo pipefail
+        if [[ ! "${VSY_PULL_REQUEST_NUMBER}" =~ ^[1-9][0-9]*$ || ! "${VSY_REPOSITORY_ID}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "No pull request or repository ID was supplied; skipping the GitHub report."
+          exit 0
+        fi
+        api_url="${VSY_API_URL:-https://app.vyspec.com}"
+        if [[ ! "${api_url}" =~ ^https://[^/]+/?$ && ! "${api_url}" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/?$ ]]; then
+          echo "::error::VSY_API_URL must be an HTTPS origin."
+          exit 2
+        fi
+        api_url="${api_url%/}"
+        result="null"
+        if [[ -s "${VSY_RESULT_FILE}" ]]; then
+          result="$(jq -c '{findings, qa_verdict, run_id, run_url}' "${VSY_RESULT_FILE}")"
+        fi
+        payload="$(jq -cn \
+          --argjson change_request_number "${VSY_PULL_REQUEST_NUMBER}" \
+          --arg provider_repository_id "${VSY_REPOSITORY_ID}" \
+          --argjson result "${result}" \
+          '{change_request_number: $change_request_number, provider_repository_id: $provider_repository_id, result: $result}')"
+        curl --silent --show-error --fail-with-body --retry 2 \
+          --request POST \
+          --header "Authorization: Bearer ${VSY_PROJECT_API_KEY}" \
+          --header "Content-Type: application/json" \
+          --data "${payload}" \
+          "${api_url}/api/v1/integrations/github/report"
 
     - name: Preserve Vyspec operational status
       if: ${{ always() && steps.qa.outcome == 'failure' }}

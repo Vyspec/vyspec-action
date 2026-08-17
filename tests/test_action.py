@@ -58,7 +58,7 @@ class ActionContractTests(unittest.TestCase):
 
     def test_pins_third_party_actions_to_full_commit_shas(self) -> None:
         references = re.findall(r"uses: ([^\s]+)", self.source)
-        self.assertEqual(len(references), 2)
+        self.assertEqual(len(references), 1)
         for reference in references:
             self.assertRegex(reference, r"@(?:[0-9a-f]{40})$")
 
@@ -202,16 +202,63 @@ class ActionContractTests(unittest.TestCase):
         self.assertIn('--result-file "${VSY_RESULT_FILE}"', self.source)
 
     def test_reports_one_comment_and_preserves_operational_failure(self) -> None:
-        self.assertIn("<!-- vyspec-qa-result -->", self.source)
         self.assertIn("pull-request-number:", self.source)
         self.assertIn("ci-branch:", self.source)
         self.assertIn("VSY_PULL_REQUEST_NUMBER", self.source)
-        self.assertIn("No pull request number was supplied", self.source)
-        self.assertIn("github.rest.issues.updateComment", self.source)
-        self.assertIn("github.rest.issues.createComment", self.source)
-        self.assertIn("❌ Vyspec QA — FAILED", self.source)
-        self.assertIn("✅ Vyspec QA — PASSED", self.source)
+        self.assertIn("/api/v1/integrations/github/report", self.source)
+        self.assertIn("github.repository_id", self.source)
+        self.assertNotIn("actions/github-script", self.source)
+        self.assertNotIn("github-token:", self.source)
         self.assertIn('run: exit "${VSY_EXIT_CODE:-2}"', self.source)
+
+    def test_sends_the_canonical_result_to_the_vyspec_github_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            fake_curl = temporary / "curl"
+            fake_curl.write_text(
+                '#!/usr/bin/env bash\nprintf \'%s\\0\' "$@" > "${CURL_ARGS_FILE}"\n',
+                encoding="utf-8",
+            )
+            fake_curl.chmod(0o755)
+            result_file = temporary / "result.json"
+            result_file.write_text(json.dumps({
+                "findings": [],
+                "qa_verdict": "passed",
+                "run_id": "00000000-0000-4000-8000-000000000001",
+                "run_url": "https://app.vyspec.test/app/runs/00000000-0000-4000-8000-000000000001",
+            }), encoding="utf-8")
+            args_file = temporary / "curl-args"
+            completed = subprocess.run(
+                ["bash", "-c", self.steps["Update pull-request report"]["run"]],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "CURL_ARGS_FILE": str(args_file),
+                    "PATH": f"{temporary}:{os.environ['PATH']}",
+                    "VSY_API_URL": "https://app.vyspec.test",
+                    "VSY_PROJECT_API_KEY": "project-key",
+                    "VSY_PULL_REQUEST_NUMBER": "12",
+                    "VSY_REPOSITORY_ID": "42",
+                    "VSY_RESULT_FILE": str(result_file),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            arguments = [
+                value.decode()
+                for value in args_file.read_bytes().split(b"\0")
+                if value
+            ]
+            self.assertIn(
+                "https://app.vyspec.test/api/v1/integrations/github/report",
+                arguments,
+            )
+            payload = json.loads(arguments[arguments.index("--data") + 1])
+            self.assertEqual(payload["change_request_number"], 12)
+            self.assertEqual(payload["provider_repository_id"], "42")
+            self.assertEqual(payload["result"]["qa_verdict"], "passed")
 
     def test_readme_documents_saved_and_direct_usage(self) -> None:
         readme = README.read_text(encoding="utf-8")
@@ -222,7 +269,8 @@ class ActionContractTests(unittest.TestCase):
         self.assertIn("start-path:", readme)
         self.assertIn("`pull-request-number`", readme)
         self.assertIn("`ci-branch`", readme)
-        self.assertIn("pull-requests: write", readme)
+        self.assertNotIn("pull-requests: write", readme)
+        self.assertIn("Vyspec GitHub App", readme)
         self.assertIn("127.0.0.1:3000", readme)
 
 
