@@ -52,9 +52,16 @@ class ActionContractTests(unittest.TestCase):
         )
 
     def test_uses_the_immutable_public_cli_release(self) -> None:
-        self.assertIn('VYSPEC_CLI_VERSION: "0.1.3"', self.source)
+        self.assertRegex(
+            self.source,
+            r'VYSPEC_CLI_VERSION: "\d+\.\d+\.\d+"',
+        )
         self.assertIn('python -m pip install "vyspec==${VYSPEC_CLI_VERSION}"', self.source)
         self.assertNotIn("GITHUB_ACTION_PATH", self.source)
+
+    def test_defaults_to_the_public_vyspec_origin(self) -> None:
+        self.assertIn("https://www.vyspec.com", self.source)
+        self.assertNotIn("https://app.vyspec.com", self.source)
 
     def test_pins_third_party_actions_to_full_commit_shas(self) -> None:
         references = re.findall(r"uses: ([^\s]+)", self.source)
